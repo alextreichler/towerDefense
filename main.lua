@@ -98,15 +98,19 @@ function love.load()
            grid[y][x] = 0 -- Set cell to empty
          end
        end
-       -- Define a simple horizontal path in the middle
-       local pathY = math.floor(gridHeight / 2)
-       pathY = math.max(1, math.min(gridHeight, pathY))
-       if grid[pathY] then
-           for x = 1, gridWidth do
-               if grid[pathY][x] ~= nil then grid[pathY][x] = 1 end
+       -- *** MODIFIED: Define a simple vertical path in the middle ***
+       local pathX = math.floor(gridWidth / 2)
+       pathX = math.max(1, math.min(gridWidth, pathX)) -- Ensure pathX is within bounds
+       if pathX >= 1 and pathX <= gridWidth then
+           for y = 1, gridHeight do
+                if grid[y] and grid[y][pathX] ~= nil then -- Check if row and cell exist
+                    grid[y][pathX] = 1 -- Mark cell as path
+                end
            end
-           print("Path created on row " .. pathY)
-       else print("Warning: Calculated path Y ["..pathY.."] is out of grid bounds during grid setup.") end
+           print("Vertical path created on column " .. pathX)
+       else
+           print("Warning: Calculated path X ["..pathX.."] is out of grid bounds during grid setup.")
+       end
        print("Grid initialized.")
     else print("ERROR: Cannot initialize grid due to invalid dimensions (" .. tostring(gridWidth) .. "x" .. tostring(gridHeight) .. ").") end
 
@@ -116,45 +120,61 @@ end -- End of love.load
 function love.update(dt)
   if not gridWidth or gridWidth <= 0 then return end -- Grid check
 
-  -- 1. Spawning Logic -- (Same as before)
+  -- *** MODIFIED: Spawning Logic (Top-Down) ***
   timeSinceLastSpawn = timeSinceLastSpawn + dt
   if timeSinceLastSpawn >= spawnInterval then
-      local pathY = math.floor(gridHeight / 2); pathY = math.max(1, math.min(gridHeight, pathY))
-      local spawnPixelY = (pathY - 1) * gridSize + gridSize / 2
+      local pathX = math.floor(gridWidth / 2) -- Find the middle column
+      pathX = math.max(1, math.min(gridWidth, pathX)) -- Ensure pathX is valid
+      local spawnPixelX = (pathX - 1) * gridSize + gridSize / 2 -- Center X of the path column
       local enemyType = enemyData[1]
-      local newEnemy = { x = -gridSize, y = spawnPixelY, pathIndex = 1, data = enemyType, health = enemyType.health, maxHealth = enemyType.health }
+      -- Spawn above the screen at the calculated X, pathIndex starts at 1 (first row)
+      local newEnemy = { x = spawnPixelX, y = -gridSize, pathIndex = 1, data = enemyType, health = enemyType.health, maxHealth = enemyType.health }
       table.insert(enemies, newEnemy)
       timeSinceLastSpawn = 0
-      -- print("Spawned enemy at Y:", spawnPixelY) -- Reduce print frequency
   end
 
-  -- 2. Enemy Movement -- (Same as before)
-  local pathY = math.floor(gridHeight / 2); pathY = math.max(1, math.min(gridHeight, pathY))
+  -- *** MODIFIED: Enemy Movement (Top-Down) ***
+  local pathX = math.floor(gridWidth / 2); pathX = math.max(1, math.min(gridWidth, pathX)) -- Find the path column again
   for i = #enemies, 1, -1 do
     local enemy = enemies[i]
-    local targetX = (enemy.pathIndex - 1) * gridSize + gridSize / 2
-    local targetY = (pathY - 1) * gridSize + gridSize / 2
-    local dx = targetX - enemy.x; local dy = targetY - enemy.y
-    local distSq = dx*dx + dy*dy; local moveDist = enemy.data.speed * dt
+    -- Target is the center of the *next* grid cell in the path column
+    local targetX = (pathX - 1) * gridSize + gridSize / 2
+    local targetY = (enemy.pathIndex - 1) * gridSize + gridSize / 2 -- Target Y depends on pathIndex (row)
+
+    local dx = targetX - enemy.x
+    local dy = targetY - enemy.y -- Primarily moving along Y
+    local distSq = dx*dx + dy*dy;
+    local moveDist = enemy.data.speed * dt
     if distSq > moveDist * moveDist and distSq > 0.1 then
-         local dist = math.sqrt(distSq); local normX = dx / dist; local normY = dy / dist
-         enemy.x = enemy.x + normX * moveDist; enemy.y = enemy.y + normY * moveDist
+         -- Move towards the target point
+         local dist = math.sqrt(distSq);
+         local normX = dx / dist; local normY = dy / dist
+         enemy.x = enemy.x + normX * moveDist;
+         enemy.y = enemy.y + normY * moveDist
     else
-         enemy.x = targetX; enemy.y = targetY
-         enemy.pathIndex = enemy.pathIndex + 1
-         if enemy.pathIndex > gridWidth then
-             print("Enemy reached end"); table.remove(enemies, i) -- TODO: Lose life
+         -- Snap to the target point and advance path index
+         enemy.x = targetX;
+         enemy.y = targetY
+         enemy.pathIndex = enemy.pathIndex + 1 -- Move to the next row
+
+         -- Check if enemy reached the bottom edge
+         if enemy.pathIndex > gridHeight then
+             print("Enemy reached bottom end");
+             table.remove(enemies, i) -- Remove enemy, TODO: Lose life
          end
     end
   end
+
 
   -- 3. Tower Attack Logic -- (Same as before)
   for i, tower in ipairs(towers) do
       tower.cooldown = (tower.cooldown or 0) - dt
       if tower.cooldown <= 0 then
-          local targetAcquired = nil; local closestDistSq = tower.data.range * tower.data.range
+          local targetAcquired = nil;
+          local closestDistSq = tower.data.range * tower.data.range
           for j, enemy in ipairs(enemies) do
-              local dx = tower.x - enemy.x; local dy = tower.y - enemy.y; local distSq = dx*dx + dy*dy
+              local dx = tower.x - enemy.x;
+              local dy = tower.y - enemy.y; local distSq = dx*dx + dy*dy
               if distSq <= closestDistSq then closestDistSq = distSq; targetAcquired = enemy end
           end
           if targetAcquired then
@@ -174,16 +194,19 @@ function love.update(dt)
     end
     if not targetIsValid then table.remove(projectiles, i)
     else
-        local dx = proj.target.x - proj.x; local dy = proj.target.y - proj.y; local distSq = dx*dx + dy*dy
+        local dx = proj.target.x - proj.x;
+        local dy = proj.target.y - proj.y; local distSq = dx*dx + dy*dy
         local moveDist = proj.speed * dt
         if distSq > moveDist * moveDist and distSq > 0.1 then
-             local dist = math.sqrt(distSq); local normX = dx / dist; local normY = dy / dist
-             proj.x = proj.x + normX * moveDist; proj.y = proj.y + normY * moveDist
+             local dist = math.sqrt(distSq);
+             local normX = dx / dist; local normY = dy / dist
+             proj.x = proj.x + normX * moveDist;
+             proj.y = proj.y + normY * moveDist
         else
              proj.target.health = proj.target.health - proj.damage
-             -- print("Enemy health:", proj.target.health) -- Reduce print frequency
              if proj.target.health <= 0 then
-                 money = money + proj.target.data.value; print("Enemy died! Money:", money)
+                 money = money + proj.target.data.value;
+                 print("Enemy died! Money:", money)
                  for j = #enemies, 1, -1 do if enemies[j] == proj.target then table.remove(enemies, j); break end end
              end
              table.remove(projectiles, i)
@@ -212,31 +235,21 @@ function love.draw()
     end
   end
 
-  -- *** 2. Draw Towers (Modified) *** --------------------------------------
+  -- 2. Draw Towers -- (Same as before)
   for _, tower in ipairs(towers) do
       if tower.image then
-          -- Draw the loaded image
-          love.graphics.setColor(1, 1, 1) -- Use white color for no tint
+          love.graphics.setColor(1, 1, 1)
           love.graphics.draw(
-              tower.image,    -- The Image object stored on the tower
-              tower.x,        -- Tower's center X
-              tower.y,        -- Tower's center Y
-              0,              -- Rotation
-              1,              -- Scale X
-              1,              -- Scale Y
-              tower.offsetX,  -- Image horizontal offset (calculated on creation)
-              tower.offsetY   -- Image vertical offset (calculated on creation)
+              tower.image,
+              tower.x, tower.y, 0, 1, 1,
+              tower.offsetX, tower.offsetY
           )
       else
-          -- Fallback: Draw a rectangle if image is missing
-          love.graphics.setColor(0.3, 0.3, 1) -- Blueish
+          love.graphics.setColor(0.3, 0.3, 1)
           local fallbackSize = gridSize * 0.8
           love.graphics.rectangle("fill", tower.x - fallbackSize/2, tower.y - fallbackSize/2, fallbackSize, fallbackSize)
-          if font then love.graphics.print("!", tower.x - 4, tower.y - 8) end -- Indicate missing image
+          if font then love.graphics.print("!", tower.x - 4, tower.y - 8) end
       end
-       -- Optional: Draw tower range when placing or selected? (Could add later)
-       -- love.graphics.setColor(1, 1, 1, 0.1) -- Faint white circle
-       -- love.graphics.circle("line", tower.x, tower.y, tower.data.range)
   end
 
   -- 3. Draw Enemies -- (Same as before)
@@ -264,75 +277,47 @@ function love.draw()
       love.graphics.print("Wave: " .. wave, 10, 30)
       local buildTower = towerData[1]
       love.graphics.print("Click to build: " .. buildTower.name .. " (Cost: " .. buildTower.cost .. ")", 10, 50)
-      -- love.graphics.print("FPS: " .. love.timer.getFPS(), love.graphics.getWidth() - 80, 10) -- Optional FPS
   else love.graphics.setColor(1,0,0); love.graphics.print("Font not loaded!", 10, 10) end
 
 end -- End of love.draw
 
--- *** love.mousepressed (Modified) ***
+-- love.mousepressed -- (Same as before)
 function love.mousepressed(x, y, button)
      if button == 1 then -- Left click
-        -- Convert pixel coordinates to grid coordinates directly
         local gridX = math.floor(x / gridSize) + 1
         local gridY = math.floor(y / gridSize) + 1
-
         print("Mouse clicked at grid coords: X="..gridX, "Y="..gridY)
-
-        -- Get tower data directly
-        local towerTypeIndex = 1 -- Assuming basic tower is type 1
+        local towerTypeIndex = 1
         local buildData = towerData[towerTypeIndex]
         local towerCost = buildData.cost
-
-        -- Perform checks directly
         local buildable = false
-        if gridY >= 1 and gridY <= gridHeight and gridX >= 1 and gridX <= gridWidth then -- Check bounds
-             if grid[gridY] and grid[gridY][gridX] == 0 then -- Check if cell exists and is empty (0)
-                 buildable = true
-             elseif grid[gridY] and grid[gridY][gridX] == 1 then
-                 print("Cannot build on the path.")
-             elseif grid[gridY] and grid[gridY][gridX] == 2 then
-                 print("Cell already occupied by a tower.")
-             end
-        else
-             print("Clicked outside grid bounds.")
-        end
+        if gridY >= 1 and gridY <= gridHeight and gridX >= 1 and gridX <= gridWidth then
+            if grid[gridY] and grid[gridY][gridX] == 0 then buildable = true
+            elseif grid[gridY] and grid[gridY][gridX] == 1 then print("Cannot build on the path.")
+            elseif grid[gridY] and grid[gridY][gridX] == 2 then print("Cell already occupied by a tower.")
+            end
+        else print("Clicked outside grid bounds.") end
 
-        -- If buildable and enough money
         if buildable and money >= towerCost then
-            -- Calculate center of the grid cell for tower position
             local towerXCenter = (gridX - 1) * gridSize + gridSize / 2
             local towerYCenter = (gridY - 1) * gridSize + gridSize / 2
-
-            -- Get the loaded image object
-            local towerImage = _G.LoadedAssets.towerImageBasic -- Assuming this key matches the loaded asset
-
-            -- Create the new tower table with image info
+            local towerImage = _G.LoadedAssets.towerImageBasic
             local newTower = {
-               x = towerXCenter,
-               y = towerYCenter,
-               data = buildData, -- Reference the static tower data
-               typeIndex = towerTypeIndex,
-               cooldown = 0, -- Start ready to fire
-               image = towerImage, -- Store the LÖVE Image object
-               -- Store dimensions and offsets needed for drawing
-               imgWidth = towerImage and towerImage:getWidth() or (gridSize * 0.8), -- Use image width or fallback
-               imgHeight = towerImage and towerImage:getHeight() or (gridSize * 0.8), -- Use image height or fallback
+               x = towerXCenter, y = towerYCenter, data = buildData,
+               typeIndex = towerTypeIndex, cooldown = 0, image = towerImage,
+               imgWidth = towerImage and towerImage:getWidth() or (gridSize * 0.8),
+               imgHeight = towerImage and towerImage:getHeight() or (gridSize * 0.8),
             }
-            -- Calculate offsets (center point relative to top-left of image)
             newTower.offsetX = newTower.imgWidth / 2
             newTower.offsetY = newTower.imgHeight / 2
-
-            -- Add tower to list, update grid, spend money
             table.insert(towers, newTower)
-            grid[gridY][gridX] = 2 -- Mark cell as occupied by tower
-            money = money - towerCost -- Deduct cost
+            grid[gridY][gridX] = 2
+            money = money - towerCost
             print("Placed tower at", gridX, gridY, ". Money left:", money)
-
         elseif buildable and money < towerCost then
              print("Not enough money. Need", towerCost, "have", money)
         end
-     end -- End if button == 1
+     end
 end -- End of love.mousepressed
-
 
 print("--- main.lua finished reading ---")
